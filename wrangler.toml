@@ -1,0 +1,12 @@
+# Cloudflare Workers deploy target (alternative to Netlify). Build with
+# `pnpm build:cloudflare`, then `wrangler deploy` — or let the GitHub Action do
+# it (see .github/workflows/deploy.yml). Set the secret once with:
+#   wrangler secret put NITRO_PROXY_SECRET
+name = "crimson-proxy"
+main = "./.output/server/index.mjs"
+compatibility_date = "2025-06-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[observability]
+enabled = true

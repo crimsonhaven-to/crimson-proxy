@@ -1,0 +1,33 @@
+{
+  "name": "crimsonhaven-to/crimson-proxy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Signed, HLS-aware CORS relay for Crimson Haven — offloads stream-segment bandwidth from the backend onto free edge hosting.",
+  "type": "module",
+  "scripts": {
+    "prepare": "nitropack prepare",
+    "dev": "nitropack dev",
+    "build": "nitropack build",
+    "build:netlify": "cross-env NITRO_PRESET=netlify_edge nitropack build",
+    "build:cloudflare": "cross-env NITRO_PRESET=cloudflare_module nitropack build",
+    "build:node": "cross-env NITRO_PRESET=node-server nitropack build",
+    "start": "node .output/server/index.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "h3": "^1.15.1",
+    "nitropack": "^2.11.9"
+  },
+  "devDependencies": {
+    "@rollup/wasm-node": "^4.40.0",
+    "@types/node": "^22.5.0",
+    "cross-env": "^7.0.3",
+    "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "rollup": "npm:@rollup/wasm-node"
+    }
+  },
+  "packageManager": "pnpm@9.0.0"
+}

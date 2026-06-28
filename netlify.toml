@@ -1,0 +1,10 @@
+# Netlify auto-detects this on every push to the connected repo — that IS the
+# CI/CD. No manual step after the one-time "link repo + set NITRO_PROXY_SECRET".
+# `mkdir -p dist`: the netlify_edge preset expects the publish dir to exist
+# before it writes `_headers` into it (noPublicDir means Nitro creates none).
+[build]
+  command = "mkdir -p dist && pnpm build:netlify"
+  publish = "dist"
+
+[functions]
+  directory = ".netlify/functions"
