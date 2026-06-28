@@ -77,7 +77,10 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:netlify
+      # `mkdir -p dist` first: the netlify_edge preset writes `dist/_headers` but
+      # (noPublicDir) creates no publish dir itself, so it must already exist —
+      # same reason netlify.toml's build command does it. Without it: ENOENT.
+      - run: mkdir -p dist && pnpm build:netlify
       # Deploys via the Netlify CLI (not git integration), so the private,
       # org-owned repo is fine. We deploy the ALREADY-built output: `--dir=dist`
       # is the publish dir, and the CLI auto-picks the pre-built edge function
