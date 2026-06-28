@@ -69,11 +69,15 @@ sig = hex(HMAC-SHA256(secret, payload))[:32]
 ### Backend (Python) reference — drop-in for phase 1
 
 ```python
-import hmac, hashlib
+import os, hmac, hashlib, random
 from urllib.parse import quote
 
-PROXY_BASE = os.getenv("CRIMSON_PROXY_BASE", "")          # e.g. https://proxy.crimsonhaven.to
-PROXY_SECRET = os.getenv("PROXY_SECRET", "").encode()      # SAME value the proxy has
+# Comma-separated list of proxy origins. The SAME signed link works on any of
+# them (the signature covers the query fields, not the host), so we just pick
+# one per request — that's the load-balancing + failover headroom for free.
+#   e.g. "https://crimson-proxy.netlify.app,https://crimson-proxy.<acct>.workers.dev"
+PROXY_BASES = [b.strip().rstrip("/") for b in os.getenv("CRIMSON_PROXY_BASE", "").split(",") if b.strip()]
+PROXY_SECRET = os.getenv("PROXY_SECRET", "").encode()      # SAME value every proxy has
 
 def crimson_proxy_url(url: str, *, referer="", origin="", user_agent="") -> str:
     payload = "\n".join([url, referer, origin, user_agent])
@@ -85,13 +89,15 @@ def crimson_proxy_url(url: str, *, referer="", origin="", user_agent="") -> str:
         f"&ua={quote(user_agent, safe='')}"
         f"&s={sig}"
     )
-    return f"{PROXY_BASE}/?{q}"
+    return f"{random.choice(PROXY_BASES)}/?{q}"
 ```
 
 A resolver that currently returns `_proxy_path_for(stream_url)` just returns
 `crimson_proxy_url(stream_url, referer="https://voe.sx/", user_agent=_VOE_USER_AGENT)`
-instead — when `CRIMSON_PROXY_BASE` is set. Leave it unset and the backend keeps
-proxying itself, so this is a safe, flag-gated swap you can A/B per source.
+instead — when `CRIMSON_PROXY_BASE` is set. Leave it unset (empty list) and the
+backend keeps proxying itself, so this is a safe, flag-gated swap you can A/B per
+source. Set it to **one** base to use a single proxy, or **several
+comma-separated** bases to spread the load across hosts.
 
 > The proxy only rewrites the **first** playlist's children itself, so you only
 > ever sign the top-level stream URL — segments are signed by the proxy.
@@ -100,20 +106,56 @@ proxying itself, so this is a safe, flag-gated swap you can A/B per source.
 
 One-time setup, then it's hands-off (pushes auto-deploy).
 
-### Netlify (recommended, simplest)
+> **The one rule for running more than one proxy:** every host must carry the
+> **same** `NITRO_PROXY_SECRET` (= the backend's `PROXY_SECRET`). Because the
+> signature is over the query fields and not the host, an identical signed link
+> is valid on all of them — which is exactly what lets the backend pick a host
+> per request for load-balancing/failover (see `CRIMSON_PROXY_BASE` above).
 
-1. "Add new site → Import from Git", pick this repo. Netlify reads
-   `netlify.toml` and runs `pnpm build:netlify` (edge functions).
-2. Set env var **`NITRO_PROXY_SECRET`** = the backend's `PROXY_SECRET`.
-3. Done. Every push to `main` redeploys.
+### Netlify (deployed from CI, not git integration)
 
-### Cloudflare Workers (alternative)
+Netlify's git integration **won't connect a private repo owned by an org**, so we
+deploy with the Netlify CLI from the GitHub Action instead — no repo connection,
+the repo stays private. One-time setup:
 
-1. `pnpm build:cloudflare`
-2. `wrangler secret put NITRO_PROXY_SECRET` (same value as the backend)
-3. `wrangler deploy` — or add `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`
-   repo secrets and the GitHub Action in `.github/workflows/deploy.yml` deploys
-   on every push.
+1. Create the site once **without** linking git: `npx netlify-cli sites:create`
+   (or "Add new site → Deploy manually" in the dashboard). Note its **Site ID**
+   (Site configuration → General).
+2. Add two repo **Actions secrets**: `NETLIFY_AUTH_TOKEN` (Netlify → User
+   settings → Applications → New access token) and `NETLIFY_SITE_ID`.
+3. Set the runtime secret **`NITRO_PROXY_SECRET`** = the backend's `PROXY_SECRET`
+   in the Netlify dashboard (Site configuration → Environment variables). This is
+   a *runtime* value on the edge, so it lives on Netlify, not in GitHub.
+4. Done. Every push to `main` builds and `netlify deploy --prod`s from the Action
+   (self-skips if the token is absent).
+
+### Cloudflare Workers
+
+1. Create a token (Cloudflare → My Profile → API Tokens → **Edit Cloudflare
+   Workers** template) and grab your **Account ID** (Workers & Pages sidebar).
+2. Add both as repo **Actions secrets**: `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID`. The GitHub Action in `.github/workflows/deploy.yml`
+   then deploys on every push to `main` (and self-skips if the token is absent).
+3. Add a third repo **Actions secret** `NITRO_PROXY_SECRET` (= the backend's
+   `PROXY_SECRET`). The Action uploads it to the Worker on every deploy (via
+   `wrangler-action`'s `secrets:` input), so you **never need a locally
+   authenticated wrangler**. If you'd rather set it by hand: Cloudflare dashboard
+   → the Worker → Settings → Variables and Secrets → add a *Secret* named
+   `NITRO_PROXY_SECRET`. (`wrangler secret put` works too, but only once
+   `wrangler login` / `CLOUDFLARE_API_TOKEN` is set in your shell — the CI path
+   sidesteps that auth entirely.) For a purely manual deploy:
+   `pnpm build:cloudflare && wrangler deploy`.
+
+### Both at once (recommended for headroom)
+
+Do both of the above. Then point the backend at both:
+
+```
+CRIMSON_PROXY_BASE="https://<site>.netlify.app,https://crimson-proxy.<acct>.workers.dev"
+```
+
+A single push to `main` redeploys both (Netlify builds itself; the Action ships
+Cloudflare). The backend round-robins between them per request.
 
 ## Local dev
 
