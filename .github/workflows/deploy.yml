@@ -77,18 +77,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # `mkdir -p dist` first: the netlify_edge preset writes `dist/_headers` but
-      # (noPublicDir) creates no publish dir itself, so it must already exist —
-      # same reason netlify.toml's build command does it. Without it: ENOENT.
-      - run: mkdir -p dist && pnpm build:netlify
       # Deploys via the Netlify CLI (not git integration), so the private,
-      # org-owned repo is fine. We deploy the ALREADY-built output: `--dir=dist`
-      # is the publish dir, and the CLI auto-picks the pre-built edge function
-      # from .netlify/edge-functions/manifest.json (independent of --dir).
+      # org-owned repo is fine. We use `--build`, NOT a pre-built `--dir=dist`:
+      # the CLI runs netlify.toml's [build] command (`mkdir -p dist && pnpm
+      # build:netlify`) inside its OWN build pipeline, which is the step that
+      # detects Nitro's edge function in `.netlify/edge-functions/` and ships it.
+      # A plain `--dir=dist` deploy uploads only the static publish dir and skips
+      # the edge function (the CLI's own scan looks in `netlify/edge-functions/`,
+      # not Nitro's generated `.netlify/edge-functions/`) -> every route 404s.
       # Self-skips unless NETLIFY_AUTH_TOKEN is set in repo secrets.
       - name: Deploy to Netlify
         if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: npx --yes netlify-cli@latest deploy --prod --dir=dist
+        run: npx --yes netlify-cli@latest deploy --build --prod

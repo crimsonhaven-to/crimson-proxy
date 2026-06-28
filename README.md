@@ -126,8 +126,11 @@ the repo stays private. One-time setup:
 3. Set the runtime secret **`NITRO_PROXY_SECRET`** = the backend's `PROXY_SECRET`
    in the Netlify dashboard (Site configuration → Environment variables). This is
    a *runtime* value on the edge, so it lives on Netlify, not in GitHub.
-4. Done. Every push to `main` builds and `netlify deploy --prod`s from the Action
-   (self-skips if the token is absent).
+4. Done. Every push to `main` runs `netlify deploy --build --prod` from the Action
+   (self-skips if the token is absent). `--build` is required, not `--dir=dist`:
+   it runs the build inside the CLI's own pipeline so Nitro's edge function in
+   `.netlify/edge-functions/` is detected and shipped — a static-only deploy
+   skips it and every route 404s.
 
 ### Cloudflare Workers
 
