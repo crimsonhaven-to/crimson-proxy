@@ -9,12 +9,20 @@ export interface ProxyConfig {
   defaultUserAgent: string;
   version: string;
   /**
-   * Jellyfin edge token injection (New System §4/§8 — edge-held secret). The
-   * hostname(s) of the user's Jellyfin server we're allowed to inject the access
-   * token for, and the token itself. Both must be set to enable it; the token is
-   * an EDGE secret (lives here, never in the browser). See utils/inject.ts.
+   * Jellyfin edge token injection (New System §4/§8 — edge-held secret). The edge
+   * authenticates to the user's Jellyfin server itself (username+password, mirroring
+   * the backend) and injects the resulting access token for requests to that host.
+   * The credentials/token are EDGE secrets — never sent to the browser. See
+   * utils/inject.ts + utils/jellyfin-auth.ts.
+   *   jellyfinUrl       — base URL of the Jellyfin server (also the inject host).
+   *   jellyfinUsername  — login user.
+   *   jellyfinPassword  — login password (may be empty).
+   *   jellyfinToken     — OPTIONAL shortcut: a pre-minted access token; when set we
+   *                       skip username/password auth and use it directly.
    */
-  jellyfinHosts: string[];
+  jellyfinUrl: string;
+  jellyfinUsername: string;
+  jellyfinPassword: string;
   jellyfinToken: string;
 }
 
@@ -30,11 +38,9 @@ export function getConfig(event: H3Event): ProxyConfig {
     requireSignature: secret.length > 0,
     defaultUserAgent: (rc.defaultUserAgent ?? "").toString(),
     version: (rc.version ?? "0.0.0").toString(),
-    jellyfinHosts: (rc.jellyfinHosts ?? "")
-      .toString()
-      .split(",")
-      .map((h) => h.trim().toLowerCase())
-      .filter(Boolean),
+    jellyfinUrl: (rc.jellyfinUrl ?? "").toString().replace(/\/+$/, ""),
+    jellyfinUsername: (rc.jellyfinUsername ?? "").toString(),
+    jellyfinPassword: (rc.jellyfinPassword ?? "").toString(),
     jellyfinToken: (rc.jellyfinToken ?? "").toString(),
   };
 }

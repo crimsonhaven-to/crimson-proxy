@@ -2,11 +2,12 @@ import type { ProxyConfig } from "@/utils/config";
 
 /*
  * Edge token injection (New System §4/§8 — the `/mw`-style "edge holds the secret"
- * pattern, here for Jellyfin). The user's Jellyfin access token lives ONLY in this
- * proxy's env (NITRO_JELLYFIN_TOKEN), never in the browser. When a signed request
- * targets the configured Jellyfin host, we add the token to the upstream fetch
- * (query `api_key` + an Authorization header), so the bytes flow
- * Jellyfin → edge → viewer with the token never leaving the edge.
+ * pattern, here for Jellyfin). The edge authenticates to Jellyfin itself
+ * (username/password → access token; see utils/jellyfin-auth.ts), and that token
+ * lives ONLY in this proxy, never in the browser. When a signed request targets the
+ * configured Jellyfin host, we add the token to the upstream fetch (query `api_key`
+ * + an Authorization header), so the bytes flow Jellyfin → edge → viewer with the
+ * token never leaving the edge.
  *
  * Jellyfin bakes `api_key` into the children of the HLS playlists it returns, so
  * when we rewrite a playlist we STRIP the token from each child first (it would
@@ -17,11 +18,26 @@ import type { ProxyConfig } from "@/utils/config";
 
 const API_KEY_PARAMS = ["api_key", "apikey"];
 
-/** Is this upstream URL a Jellyfin host we hold a token for? */
-export function jellyfinInjectable(url: string, cfg: ProxyConfig): boolean {
-  if (!cfg.jellyfinToken || cfg.jellyfinHosts.length === 0) return false;
+/** Is Jellyfin edge injection configured at all (a token, or url+username)? */
+export function jellyfinConfigured(cfg: ProxyConfig): boolean {
+  return Boolean(cfg.jellyfinToken || (cfg.jellyfinUrl && cfg.jellyfinUsername));
+}
+
+/** The Jellyfin host we inject for — the hostname of the configured Jellyfin URL. */
+function jellyfinHost(cfg: ProxyConfig): string {
   try {
-    return cfg.jellyfinHosts.includes(new URL(url).hostname.toLowerCase());
+    return cfg.jellyfinUrl ? new URL(cfg.jellyfinUrl).hostname.toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Is this upstream URL the configured Jellyfin host? */
+export function jellyfinInjectable(url: string, cfg: ProxyConfig): boolean {
+  const host = jellyfinHost(cfg);
+  if (!host || !jellyfinConfigured(cfg)) return false;
+  try {
+    return new URL(url).hostname.toLowerCase() === host;
   } catch {
     return false;
   }

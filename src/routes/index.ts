@@ -9,6 +9,10 @@ import {
   stripJellyfinToken,
 } from "@/utils/inject";
 import {
+  getToken as getJellyfinToken,
+  clearToken as clearJellyfinToken,
+} from "@/utils/jellyfin-auth";
+import {
   CORS_HEADERS,
   buildResponseHeaders,
   buildUpstreamHeaders,
@@ -62,23 +66,37 @@ export default defineEventHandler(async (event): Promise<Response> => {
     rangeHeader,
   );
 
-  // Edge token injection: if this is the configured Jellyfin host, add the token
-  // (query + Authorization) to the upstream fetch. The token stays on the edge —
-  // it's never in `fields.url` (what the browser signed/sees).
+  // Edge token injection: if this is the configured Jellyfin host, the edge
+  // authenticates (cached) and adds the token (query + Authorization) to the
+  // upstream fetch. The token stays on the edge — never in `fields.url` (what the
+  // browser signed/sees).
   const injectJellyfin = jellyfinInjectable(fields.url, cfg);
-  let fetchUrl = fields.url;
-  if (injectJellyfin) {
-    fetchUrl = withJellyfinToken(fields.url, cfg.jellyfinToken);
-    upstreamHeaders.set("Authorization", `MediaBrowser Token="${cfg.jellyfinToken}"`);
-  }
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(fetchUrl, {
+  const fetchUpstream = async (token: string | null): Promise<Response> => {
+    let url = fields.url;
+    if (token) {
+      url = withJellyfinToken(fields.url, token);
+      upstreamHeaders.set("Authorization", `MediaBrowser Token="${token}"`);
+    }
+    return fetch(url, {
       method: event.method,
       headers: upstreamHeaders,
       redirect: "follow",
     });
+  };
+
+  let upstream: Response;
+  try {
+    if (injectJellyfin) {
+      upstream = await fetchUpstream(await getJellyfinToken(cfg));
+      // Cached session expired/invalidated → re-auth once and retry.
+      if (upstream.status === 401) {
+        clearJellyfinToken();
+        upstream = await fetchUpstream(await getJellyfinToken(cfg));
+      }
+    } else {
+      upstream = await fetchUpstream(null);
+    }
   } catch (e) {
     return json({ error: "Upstream fetch failed", detail: String(e) }, 502);
   }

@@ -20,11 +20,14 @@ export default defineNitroConfig({
     proxySecret: "",
     defaultUserAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    // Jellyfin edge token injection (NITRO_JELLYFIN_HOSTS / NITRO_JELLYFIN_TOKEN).
-    // jellyfinHosts is a comma-separated allow-list of the Jellyfin hostname(s) we
-    // may inject the token for; jellyfinToken is the access token (an EDGE secret,
-    // never sent to the browser). Both empty => injection disabled. See utils/inject.ts.
-    jellyfinHosts: "",
+    // Jellyfin edge token injection (NITRO_JELLYFIN_URL / _USERNAME / _PASSWORD,
+    // optional _TOKEN). The edge logs into Jellyfin itself (like the backend) and
+    // injects the access token for requests to jellyfinUrl's host. All EDGE secrets
+    // — never sent to the browser. jellyfinUrl empty => injection disabled.
+    // See utils/inject.ts + utils/jellyfin-auth.ts.
+    jellyfinUrl: "",
+    jellyfinUsername: "",
+    jellyfinPassword: "",
     jellyfinToken: "",
   },
   alias: {
