@@ -77,31 +77,23 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Deploys via the Netlify CLI (not git integration), so the private,
-      # org-owned repo is fine. We deploy in TWO explicit steps:
+      # Deploys via the Netlify CLI (not git integration), so the private, org-owned
+      # repo is fine. ONE integrated `netlify deploy --prod`: it runs @netlify/build
+      # (the netlify.toml [build] command + "Edge Functions bundling") AND ships the
+      # result in the SAME process. That single-process run is mandatory here —
+      # Nitro's edge function is *framework-generated* (an "internal" edge function
+      # in `.netlify/edge-functions/`), and Netlify wires those into the deploy via an
+      # IN-PROCESS handoff from build → deploy. Splitting the phases breaks it:
+      #   • `deploy --no-build` skips @netlify/build, so the internal edge function is
+      #     never handed over → it 404s even though `netlify build` bundled it fine.
+      #   • `deploy --build --json` / `--json` suppressed the build entirely → same.
+      # Both were tried and both 404'd; the plain one-shot is the documented path that
+      # actually deploys the internal edge function.
       #
-      #   1. `netlify build`  — runs netlify.toml's [build] command (`mkdir -p dist
-      #      && pnpm build:netlify`) AND, crucially, the "Edge Functions bundling"
-      #      phase that turns Nitro's generated `.netlify/edge-functions/` into the
-      #      deploy-ready `.netlify/edge-functions-dist/` bundle. Logs are visible.
-      #   2. `netlify deploy --prod --no-build --json` — ships that build output
-      #      (incl. the internal edge function) and prints clean JSON for the URL.
-      #
-      # Why NOT the one-shot `deploy --build --json`: combining `--build` with
-      # `--json` SKIPS the build (the CLI emitted only the result JSON, no "Building
-      # Nitro Server" / "Packaging Edge Functions" lines), so the edge function was
-      # never generated -> empty publish dir, every route 404s, only netlify.toml in
-      # the file browser. Splitting the phases guarantees the build runs and is
-      # legible, and keeps the JSON URL parse clean.
-      #
-      # We do NOT use `--dir=dist`: that uploads only the static publish dir and
-      # drops the edge function. Self-skips unless NETLIFY_AUTH_TOKEN is set.
-      - name: Build for Netlify
-        if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: npx --yes netlify-cli@latest build
+      # No `--json` (it interfered with the build) — we grep the production URL from
+      # the human output instead (the *.netlify.app host WITHOUT the per-deploy hash
+      # prefix). No `--dir=dist` either (that uploads only the static dir, no function).
+      # Self-skips unless NETLIFY_AUTH_TOKEN is set.
       - name: Deploy to Netlify
         if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
         env:
@@ -109,23 +101,12 @@ jobs:
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
           set -euo pipefail
-          # --no-build: deploy EXACTLY the artifact the build step above produced
-          # (incl. the bundled edge function) instead of letting `deploy` re-run its
-          # own implicit build. `deploy` still "uploads static files, functions, and
-          # edge functions" per its docs, so the internal edge function ships.
-          result=$(npx --yes netlify-cli@latest deploy --prod --no-build --json)
-          echo "$result"
-          # Pull the production URL: strict JSON first, then a loose regex fallback.
-          # A parse miss only skips the smoke test (warn); never fails a good deploy.
-          url=$(printf '%s' "$result" | node -e "
-            const s=require('fs').readFileSync(0,'utf8');
-            let u='';
-            try{const d=JSON.parse(s);u=d.ssl_url||d.url||d.deploy_ssl_url||d.deploy_url||'';}catch{}
-            if(!u){const m=s.match(/https:\/\/[a-z0-9.-]+\.netlify\.app/i);u=m?m[0]:'';}
-            process.stdout.write(u);
-          ")
+          out=$(npx --yes netlify-cli@latest deploy --prod 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          # Production URL = the *.netlify.app host without the `<hash>--` deploy prefix.
+          url=$(printf '%s\n' "$out" | grep -oiE 'https://[a-z0-9-]+\.netlify\.app' | grep -v -- '--' | head -1 || true)
           if [ -z "$url" ]; then
-            echo '::warning::Could not parse the Netlify deploy URL — skipping smoke test. Verify the proxy manually.'
+            echo '::warning::Could not parse the Netlify production URL — skipping smoke test. Verify the proxy manually.'
             exit 0
           fi
           echo "Deployed to: $url"
