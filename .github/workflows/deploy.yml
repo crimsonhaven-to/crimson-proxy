@@ -78,19 +78,30 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Deploys via the Netlify CLI (not git integration), so the private,
-      # org-owned repo is fine. We use `--build`, NOT a pre-built `--dir=dist`:
-      # the CLI runs netlify.toml's [build] command (`mkdir -p dist && pnpm
-      # build:netlify`) inside its OWN build pipeline, which is the step that
-      # detects Nitro's edge function in `.netlify/edge-functions/` and ships it.
-      # A plain `--dir=dist` deploy uploads only the static publish dir and skips
-      # the edge function (the CLI's own scan looks in `netlify/edge-functions/`,
-      # not Nitro's generated `.netlify/edge-functions/`) -> every route 404s.
-      # Self-skips unless NETLIFY_AUTH_TOKEN is set in repo secrets.
+      # org-owned repo is fine. We deploy in TWO explicit steps:
       #
-      # `--json` makes the CLI print the deploy result (incl. the live URL) to
-      # stdout; we then SMOKE-TEST the deployed edge function's health endpoint so a
-      # broken/empty deploy (e.g. the edge function not shipped) fails the job LOUDLY
-      # instead of going green-but-dead — the exact way the earlier breakage hid.
+      #   1. `netlify build`  — runs netlify.toml's [build] command (`mkdir -p dist
+      #      && pnpm build:netlify`) AND, crucially, the "Edge Functions bundling"
+      #      phase that turns Nitro's generated `.netlify/edge-functions/` into the
+      #      deploy-ready `.netlify/edge-functions-dist/` bundle. Logs are visible.
+      #   2. `netlify deploy --prod --no-build --json` — ships that build output
+      #      (incl. the internal edge function) and prints clean JSON for the URL.
+      #
+      # Why NOT the one-shot `deploy --build --json`: combining `--build` with
+      # `--json` SKIPS the build (the CLI emitted only the result JSON, no "Building
+      # Nitro Server" / "Packaging Edge Functions" lines), so the edge function was
+      # never generated -> empty publish dir, every route 404s, only netlify.toml in
+      # the file browser. Splitting the phases guarantees the build runs and is
+      # legible, and keeps the JSON URL parse clean.
+      #
+      # We do NOT use `--dir=dist`: that uploads only the static publish dir and
+      # drops the edge function. Self-skips unless NETLIFY_AUTH_TOKEN is set.
+      - name: Build for Netlify
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli@latest build
       - name: Deploy to Netlify
         if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
         env:
@@ -98,14 +109,14 @@ jobs:
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
           set -euo pipefail
-          # Capture the deploy output; --json asks the CLI to print the result
-          # (incl. the live URL) as JSON. Build logs may interleave depending on the
-          # CLI version, so URL extraction below is tolerant.
-          result=$(npx --yes netlify-cli@latest deploy --build --prod --json)
+          # --no-build: deploy EXACTLY the artifact the build step above produced
+          # (incl. the bundled edge function) instead of letting `deploy` re-run its
+          # own implicit build. `deploy` still "uploads static files, functions, and
+          # edge functions" per its docs, so the internal edge function ships.
+          result=$(npx --yes netlify-cli@latest deploy --prod --no-build --json)
           echo "$result"
-          # Pull the production URL: try strict JSON first, then a loose regex over
-          # the raw output. A parse miss only skips the smoke test (warn); it never
-          # fails an otherwise-good deploy.
+          # Pull the production URL: strict JSON first, then a loose regex fallback.
+          # A parse miss only skips the smoke test (warn); never fails a good deploy.
           url=$(printf '%s' "$result" | node -e "
             const s=require('fs').readFileSync(0,'utf8');
             let u='';

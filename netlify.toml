@@ -1,6 +1,9 @@
 # Netlify deploy config. We ship via the Netlify CLI from GitHub Actions (the repo
-# is private + org-owned, which Netlify's git integration refuses), so `netlify
-# deploy --build` runs THIS [build] command and then bundles whatever Nitro emits.
+# is private + org-owned, which Netlify's git integration refuses). The CI runs
+# `netlify build` (THIS [build] command + edge-function bundling) then a separate
+# `netlify deploy --no-build` — see .github/workflows/deploy.yml for why the phases
+# are split (the one-shot `deploy --build --json` silently skipped the build, so the
+# edge function was never generated → every route 404'd, only netlify.toml shipped).
 #
 # Nitro's `netlify_edge` preset writes:
 #   • the edge function     -> .netlify/edge-functions/  (manifest.json + server/)
@@ -10,10 +13,9 @@
 #
 # Do NOT add a [functions] block: this is a pure EDGE function, there are no
 # serverless (Lambda) functions. A [functions] directory pointing at a path Nitro
-# never creates (e.g. .netlify/functions) makes the CLI's deploy treat the site as
-# "no functions to ship" and publish a near-empty dist — the "Deploying: Skipped,
-# only netlify.toml in the file browser" failure. The edge function is auto-detected
-# from .netlify/edge-functions/manifest.json; it needs no [edge_functions] entry.
+# never creates (e.g. .netlify/functions) just adds a noisy "non-existing directory"
+# warning. The edge function is auto-detected from .netlify/edge-functions/manifest.json;
+# it needs no [edge_functions] entry.
 [build]
   command = "mkdir -p dist && pnpm build:netlify"
   publish = "dist"
