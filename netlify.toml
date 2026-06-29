@@ -1,10 +1,19 @@
-# Netlify auto-detects this on every push to the connected repo — that IS the
-# CI/CD. No manual step after the one-time "link repo + set NITRO_PROXY_SECRET".
-# `mkdir -p dist`: the netlify_edge preset expects the publish dir to exist
-# before it writes `_headers` into it (noPublicDir means Nitro creates none).
+# Netlify deploy config. We ship via the Netlify CLI from GitHub Actions (the repo
+# is private + org-owned, which Netlify's git integration refuses), so `netlify
+# deploy --build` runs THIS [build] command and then bundles whatever Nitro emits.
+#
+# Nitro's `netlify_edge` preset writes:
+#   • the edge function     -> .netlify/edge-functions/  (manifest.json + server/)
+#   • the publish artifacts -> dist/_headers, dist/_redirects
+# `mkdir -p dist` first because Nitro writes `dist/_headers` WITHOUT creating the
+# dir (an upstream nitro quirk) — without it the build dies with ENOENT on _headers.
+#
+# Do NOT add a [functions] block: this is a pure EDGE function, there are no
+# serverless (Lambda) functions. A [functions] directory pointing at a path Nitro
+# never creates (e.g. .netlify/functions) makes the CLI's deploy treat the site as
+# "no functions to ship" and publish a near-empty dist — the "Deploying: Skipped,
+# only netlify.toml in the file browser" failure. The edge function is auto-detected
+# from .netlify/edge-functions/manifest.json; it needs no [edge_functions] entry.
 [build]
   command = "mkdir -p dist && pnpm build:netlify"
   publish = "dist"
-
-[functions]
-  directory = ".netlify/functions"

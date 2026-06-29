@@ -86,9 +86,42 @@ jobs:
       # the edge function (the CLI's own scan looks in `netlify/edge-functions/`,
       # not Nitro's generated `.netlify/edge-functions/`) -> every route 404s.
       # Self-skips unless NETLIFY_AUTH_TOKEN is set in repo secrets.
+      #
+      # `--json` makes the CLI print the deploy result (incl. the live URL) to
+      # stdout; we then SMOKE-TEST the deployed edge function's health endpoint so a
+      # broken/empty deploy (e.g. the edge function not shipped) fails the job LOUDLY
+      # instead of going green-but-dead — the exact way the earlier breakage hid.
       - name: Deploy to Netlify
         if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: npx --yes netlify-cli@latest deploy --build --prod
+        run: |
+          set -euo pipefail
+          # Capture the deploy output; --json asks the CLI to print the result
+          # (incl. the live URL) as JSON. Build logs may interleave depending on the
+          # CLI version, so URL extraction below is tolerant.
+          result=$(npx --yes netlify-cli@latest deploy --build --prod --json)
+          echo "$result"
+          # Pull the production URL: try strict JSON first, then a loose regex over
+          # the raw output. A parse miss only skips the smoke test (warn); it never
+          # fails an otherwise-good deploy.
+          url=$(printf '%s' "$result" | node -e "
+            const s=require('fs').readFileSync(0,'utf8');
+            let u='';
+            try{const d=JSON.parse(s);u=d.ssl_url||d.url||d.deploy_ssl_url||d.deploy_url||'';}catch{}
+            if(!u){const m=s.match(/https:\/\/[a-z0-9.-]+\.netlify\.app/i);u=m?m[0]:'';}
+            process.stdout.write(u);
+          ")
+          if [ -z "$url" ]; then
+            echo '::warning::Could not parse the Netlify deploy URL — skipping smoke test. Verify the proxy manually.'
+            exit 0
+          fi
+          echo "Deployed to: $url"
+          # The edge function must answer the health probe (`GET /` with no target
+          # returns the crimson-proxy service JSON). 404/empty => the function wasn't
+          # shipped; -f makes curl exit non-zero on HTTP error so the job goes red.
+          echo "Smoke-testing $url/ ..."
+          body=$(curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$url/")
+          echo "Health: $body"
+          echo "$body" | grep -q '"service":"crimson-proxy"'

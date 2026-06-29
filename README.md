@@ -93,11 +93,17 @@ def crimson_proxy_url(url: str, *, referer="", origin="", user_agent="") -> str:
 ```
 
 A resolver that currently returns `_proxy_path_for(stream_url)` just returns
-`crimson_proxy_url(stream_url, referer="https://voe.sx/", user_agent=_VOE_USER_AGENT)`
-instead — when `CRIMSON_PROXY_BASE` is set. Leave it unset (empty list) and the
-backend keeps proxying itself, so this is a safe, flag-gated swap you can A/B per
-source. Set it to **one** base to use a single proxy, or **several
-comma-separated** bases to spread the load across hosts.
+`crimson_proxy_url(stream_url, referer=…, origin=…, user_agent=…)` instead — when
+`CRIMSON_PROXY_BASE` is set. Leave it unset (empty list) and the backend keeps
+proxying itself, so this is a safe, flag-gated swap you can A/B per source. Set it
+to **one** base to use a single proxy, or **several comma-separated** bases to
+spread the load across hosts.
+
+> ⚠️ **Only offload sources whose CDN gating is purely header-based**
+> (`Referer`/`Origin`) — e.g. cinema.bz, PlayIMDb. A source whose stream token is
+> **bound to the resolving machine's IP/ASN** (VOE: note the `asn=` param) can
+> only be fetched from the backend that minted it; routing it through a proxy on
+> another network (any edge host) just 403s. Those MUST stay same-origin.
 
 > The proxy only rewrites the **first** playlist's children itself, so you only
 > ever sign the top-level stream URL — segments are signed by the proxy.
