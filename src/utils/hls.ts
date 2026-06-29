@@ -31,13 +31,17 @@ export async function rewritePlaylist(
   parent: SignedFields,
   secret: string,
   requireSignature: boolean,
+  // Optional transform applied to each child's absolute URL before it's signed
+  // into a proxy link — used to strip Jellyfin's baked-in api_key so the token is
+  // never baked into a browser-visible link (the edge re-injects it on fetch).
+  transformChildUrl?: (absUrl: string) => string,
 ): Promise<string> {
   // Same referer/origin/ua as the parent playlist for every child.
-  const route = (raw: string) =>
-    buildProxyPath(secret, requireSignature, {
-      ...parent,
-      url: new URL(raw.trim(), baseUrl).toString(),
-    });
+  const route = (raw: string) => {
+    let abs = new URL(raw.trim(), baseUrl).toString();
+    if (transformChildUrl) abs = transformChildUrl(abs);
+    return buildProxyPath(secret, requireSignature, { ...parent, url: abs });
+  };
 
   const lines = text.split("\n");
   const out: string[] = new Array(lines.length);

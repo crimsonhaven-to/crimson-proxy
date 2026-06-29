@@ -4,6 +4,11 @@ import { verify } from "@/utils/signing";
 import { isSafeUpstream } from "@/utils/ssrf";
 import { looksLikePlaylist, rewritePlaylist } from "@/utils/hls";
 import {
+  jellyfinInjectable,
+  withJellyfinToken,
+  stripJellyfinToken,
+} from "@/utils/inject";
+import {
   CORS_HEADERS,
   buildResponseHeaders,
   buildUpstreamHeaders,
@@ -57,9 +62,19 @@ export default defineEventHandler(async (event): Promise<Response> => {
     rangeHeader,
   );
 
+  // Edge token injection: if this is the configured Jellyfin host, add the token
+  // (query + Authorization) to the upstream fetch. The token stays on the edge —
+  // it's never in `fields.url` (what the browser signed/sees).
+  const injectJellyfin = jellyfinInjectable(fields.url, cfg);
+  let fetchUrl = fields.url;
+  if (injectJellyfin) {
+    fetchUrl = withJellyfinToken(fields.url, cfg.jellyfinToken);
+    upstreamHeaders.set("Authorization", `MediaBrowser Token="${cfg.jellyfinToken}"`);
+  }
+
   let upstream: Response;
   try {
-    upstream = await fetch(fields.url, {
+    upstream = await fetch(fetchUrl, {
       method: event.method,
       headers: upstreamHeaders,
       redirect: "follow",
@@ -82,6 +97,11 @@ export default defineEventHandler(async (event): Promise<Response> => {
       fields,
       cfg.secret,
       cfg.requireSignature,
+      // For Jellyfin children, strip the api_key Jellyfin bakes in so the token is
+      // never in a browser-visible link; the edge re-injects it on the child fetch.
+      injectJellyfin
+        ? (abs) => (jellyfinInjectable(abs, cfg) ? stripJellyfinToken(abs) : abs)
+        : undefined,
     );
     const headers = buildResponseHeaders(
       upstream,

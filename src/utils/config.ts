@@ -8,6 +8,14 @@ export interface ProxyConfig {
   /** UA used when a signed request doesn't pin one. */
   defaultUserAgent: string;
   version: string;
+  /**
+   * Jellyfin edge token injection (New System §4/§8 — edge-held secret). The
+   * hostname(s) of the user's Jellyfin server we're allowed to inject the access
+   * token for, and the token itself. Both must be set to enable it; the token is
+   * an EDGE secret (lives here, never in the browser). See utils/inject.ts.
+   */
+  jellyfinHosts: string[];
+  jellyfinToken: string;
 }
 
 // Read once per request from Nitro's runtime config. The values come from
@@ -22,5 +30,11 @@ export function getConfig(event: H3Event): ProxyConfig {
     requireSignature: secret.length > 0,
     defaultUserAgent: (rc.defaultUserAgent ?? "").toString(),
     version: (rc.version ?? "0.0.0").toString(),
+    jellyfinHosts: (rc.jellyfinHosts ?? "")
+      .toString()
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+    jellyfinToken: (rc.jellyfinToken ?? "").toString(),
   };
 }
