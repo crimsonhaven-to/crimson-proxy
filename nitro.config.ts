@@ -29,6 +29,15 @@ export default defineNitroConfig({
     jellyfinUsername: "",
     jellyfinPassword: "",
     jellyfinToken: "",
+    // ee3 edge resolution (NITRO_EE3_USERNAME / _PASSWORD, optional _HOST). ee3's
+    // torrent-stream uuid is session-bound + the stream is gated on Sec-Fetch-Site,
+    // so the edge owns the WHOLE flow: log in, search, read the movie's
+    // torrentStreamUrl, and relay it with the session cookie + same-origin headers.
+    // Creds are EDGE secrets — never sent to the browser. Empty username => disabled.
+    // See utils/ee3.ts + utils/ee3-auth.ts.
+    ee3Host: "ee3.me",
+    ee3Username: "",
+    ee3Password: "",
   },
   alias: {
     "@": join(__dirname, "src"),

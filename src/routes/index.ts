@@ -13,6 +13,16 @@ import {
   clearToken as clearJellyfinToken,
 } from "@/utils/jellyfin-auth";
 import {
+  isEe3Marker,
+  resolveEe3,
+  invalidateEe3,
+  ee3StreamHeaders,
+} from "@/utils/ee3";
+import {
+  getSession as getEe3Session,
+  clearSession as clearEe3Session,
+} from "@/utils/ee3-auth";
+import {
   CORS_HEADERS,
   buildResponseHeaders,
   buildUpstreamHeaders,
@@ -60,6 +70,47 @@ export default defineEventHandler(async (event): Promise<Response> => {
   }
 
   const rangeHeader = getHeader(event, "range") ?? null;
+
+  // ee3 edge resolution: the signed `/__ee3?title=&year=` marker isn't a fetchable
+  // URL — the edge logs in, searches, reads the movie's torrentStreamUrl, and relays
+  // the (session + same-origin gated) stream. The session-bound uuid is cached so
+  // the many Range requests of a 20GB file reuse one resolve. See utils/ee3.ts.
+  if (isEe3Marker(fields.url, cfg)) {
+    const streamOnce = async (refresh: boolean): Promise<Response | null> => {
+      const resolved = await resolveEe3(cfg, fields.url, refresh);
+      if (!resolved) return null;
+      const session = await getEe3Session(cfg);
+      if (!session) return null;
+      const streamUrl = `https://${cfg.ee3Host}${resolved.streamPath}`;
+      return fetch(streamUrl, {
+        method: event.method,
+        headers: ee3StreamHeaders(cfg, session, resolved.slug, rangeHeader),
+        redirect: "follow",
+      });
+    };
+    let upstream: Response | null;
+    try {
+      upstream = await streamOnce(false);
+      // Stale session / expired torrent mount → drop caches, re-auth + re-resolve once.
+      if (upstream && [401, 403, 404, 410].includes(upstream.status)) {
+        invalidateEe3(fields.url);
+        clearEe3Session();
+        upstream = await streamOnce(true);
+      }
+    } catch (e) {
+      return json({ error: "ee3 upstream fetch failed", detail: String(e) }, 502);
+    }
+    if (!upstream) return json({ error: "ee3 resolve failed" }, 502);
+    const ct = upstream.headers.get("content-type") ?? "";
+    // ee3 serves the file as application/force-download (would download, not play);
+    // relabel as video so the <video> element streams it. Files are MKV in practice.
+    const override = /force-download|octet-stream/i.test(ct) ? "video/x-matroska" : undefined;
+    const headers = buildResponseHeaders(upstream, upstream.url || fields.url, override);
+    return new Response(event.method === "HEAD" ? null : upstream.body, {
+      status: upstream.status,
+      headers,
+    });
+  }
   const upstreamHeaders = buildUpstreamHeaders(
     fields,
     cfg.defaultUserAgent,

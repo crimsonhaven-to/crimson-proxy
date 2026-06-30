@@ -24,6 +24,19 @@ export interface ProxyConfig {
   jellyfinUsername: string;
   jellyfinPassword: string;
   jellyfinToken: string;
+  /**
+   * ee3 edge resolution (New System §4/§8 — edge-held secret). ee3's torrent-stream
+   * uuid is session-bound and the stream is gated on Sec-Fetch-Site:same-origin, so
+   * the edge can't just inject a header into a pre-resolved URL (the Jellyfin model)
+   * — it owns the whole flow: log in, search by title, read the movie's
+   * torrentStreamUrl, and relay it with the session cookie + same-origin headers.
+   *   ee3Host      — ee3 base host (rotates; the stable `/__ee3` marker maps to it).
+   *   ee3Username  — login user (empty => ee3 resolution disabled).
+   *   ee3Password  — login password.
+   */
+  ee3Host: string;
+  ee3Username: string;
+  ee3Password: string;
 }
 
 // Read once per request from Nitro's runtime config. The values come from
@@ -42,5 +55,8 @@ export function getConfig(event: H3Event): ProxyConfig {
     jellyfinUsername: (rc.jellyfinUsername ?? "").toString(),
     jellyfinPassword: (rc.jellyfinPassword ?? "").toString(),
     jellyfinToken: (rc.jellyfinToken ?? "").toString(),
+    ee3Host: ((rc.ee3Host ?? "ee3.me").toString() || "ee3.me").replace(/\/+$/, ""),
+    ee3Username: (rc.ee3Username ?? "").toString(),
+    ee3Password: (rc.ee3Password ?? "").toString(),
   };
 }
