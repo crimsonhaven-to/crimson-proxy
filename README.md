@@ -40,6 +40,58 @@ backend.
 - **Range passthrough.** Forwards `Range` and `206` partial content, streaming
   segment bodies without buffering, so seeking works.
 
+## Edge-held secrets (beyond pure relaying)
+
+Two sources can't use the simple "backend resolves, edge relays a signed link" model
+because their secret must live somewhere the **browser** can't see *and* be applied on
+the byte path. For those the edge holds the secret itself (env vars, never shipped to
+the client) — the New System §4/§8 "edge-held secret" pattern.
+
+### 1. Jellyfin — token injection (`utils/inject.ts` + `utils/jellyfin-auth.ts`)
+
+When a signed request targets the configured Jellyfin host, the edge authenticates to
+Jellyfin itself (username/password → access token, cached) and injects the token on
+the upstream fetch (`api_key` query + `Authorization` header). It also **strips** the
+`api_key` Jellyfin bakes into playlist children when rewriting, so the token is never
+in a browser-visible link. The backend resolves the (token-less) URL; the edge adds
+the token. Bytes flow `Jellyfin → edge → viewer`.
+
+```
+NITRO_JELLYFIN_URL=https://jellyfin.example.com   # base URL + the host to inject for
+NITRO_JELLYFIN_USERNAME=...
+NITRO_JELLYFIN_PASSWORD=...
+NITRO_JELLYFIN_TOKEN=...        # optional: a pre-minted token (skips username/password)
+```
+
+### 2. ee3 — full edge resolution (`utils/ee3.ts` + `utils/ee3-auth.ts`)
+
+ee3 goes further than header injection: its playable URL is a **session-bound,
+rotating** `/api/torrent/proxy/{uuid}` gated on `Sec-Fetch-Site: same-origin`. The
+uuid is only valid for the session that read it, so **the resolver and the streamer
+must be the same party** — the edge owns the whole flow on its own session:
+
+```
+signed marker:  https://ee3.me/__ee3?title=<t>&year=<y>   (signed by the backend /sign grant)
+  edge → POST /login (form + same-origin headers)         → session cookie (cached)
+       → GET  /api/movies?title=<t>                        → match title+year → movie slug
+       → GET  /movies/{slug}/__data.json                   → the `torrentStreamUrl`
+       → GET  /api/torrent/proxy/{uuid}  (session + Referer + Sec-Fetch-Site:same-origin, Range)
+```
+
+The (slug, stream-path) is cached per marker (2h) so the many Range requests of a
+large file reuse one resolve instead of re-minting the uuid each time; the route
+re-auths + re-resolves once on `401/403/404/410`, and relabels ee3's
+`application/force-download` as `video/x-matroska` so the browser plays it.
+
+```
+NITRO_EE3_USERNAME=...     # empty => ee3 resolution disabled
+NITRO_EE3_PASSWORD=...
+NITRO_EE3_HOST=ee3.me      # optional; the stable `/__ee3` marker maps to this host
+```
+
+> All of the above are **EDGE secrets** — set them on the edge host(s), never in the
+> client bundle. Unset ⇒ the feature self-disables (un-injected relay / source skipped).
+
 ## Request shape
 
 ```
@@ -190,4 +242,8 @@ pnpm dev
 | `src/utils/links.ts` | Query-param shape + proxy-path builder. |
 | `src/utils/headers.ts` | Upstream header injection + CORS/response headers. |
 | `src/utils/ssrf.ts` | Literal private-host/scheme guard (defence in depth). |
-| `src/utils/config.ts` | Runtime config (secret, default UA). |
+| `src/utils/config.ts` | Runtime config (secret, default UA, Jellyfin + ee3 creds). |
+| `src/utils/inject.ts` | Jellyfin edge token injection (add on fetch, strip from playlist children). |
+| `src/utils/jellyfin-auth.ts` | Jellyfin login (username/password → cached access token). |
+| `src/utils/ee3.ts` | ee3 full edge resolution: marker detect → search → `__data.json` → stream, with a uuid cache. |
+| `src/utils/ee3-auth.ts` | ee3 login (form POST + same-origin headers → cached `session` cookie). |
