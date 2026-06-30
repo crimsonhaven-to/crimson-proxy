@@ -8,21 +8,24 @@ open proxy.
 ## Why this exists
 
 Most Crimson sources stream from CDNs that are gated behind a `Referer`/`Origin`
-or simply serve no CORS, so today the backend re-fetches the playlist **and every
-segment** server-side (`/voe_proxy`, `/playimdb_proxy`, …). That works, but all
-the video bytes flow in and back out of the backend.
+or simply serve no CORS — constraints a viewer's plain browser `fetch()` can't
+satisfy on its own. In the [New System](../crimson-backend/New_System.md) the
+**client** ([`crimson-sources`](../crimson-sources)) does the scraping/resolving,
+not the backend; this proxy is the **E2** delivery path that lets a no-extension
+viewer still play those gated streams without the bytes ever touching the backend.
 
-This proxy takes over that relaying. The backend keeps doing the clever part —
-scraping and resolving the stream — but instead of handing the player a
-`/{source}_proxy?…` path on its own origin, it hands a **signed link to this
-proxy**. Segment bytes then go `CDN → edge proxy → viewer` and never touch the
-backend.
+The client resolves the stream URL, then asks the backend's tiny login-gated
+**`/sign`** grant to mint a **signed link to this proxy** (the `PROXY_SECRET` stays
+server-side). The player loads that link; segment bytes go `CDN → edge proxy →
+viewer`. The backend carries only a few hundred bytes of signing per play, never
+the video. (Viewers *with* the [companion extension](../crimson-extension) skip the
+proxy entirely — E3 streams straight `CDN → viewer`.)
 
 ```
-            resolve (tiny)                 segments (huge)
- backend ───────────────▶ signed link ──▶  CDN ──▶ crimson-proxy ──▶ viewer
-   │                                                   ▲
-   └─ shares PROXY_SECRET ─────────────────────────────┘
+   client resolves          /sign (tiny)              segments (huge)
+ crimson-sources ──▶ backend ──▶ signed link ──▶ CDN ──▶ crimson-proxy ──▶ viewer
+                       │                                      ▲
+                       └─ shares PROXY_SECRET ────────────────┘
 ```
 
 ## What makes it tailored (not a generic open proxy)
@@ -63,35 +66,6 @@ NITRO_JELLYFIN_PASSWORD=...
 NITRO_JELLYFIN_TOKEN=...        # optional: a pre-minted token (skips username/password)
 ```
 
-### 2. ee3 — full edge resolution (`utils/ee3.ts` + `utils/ee3-auth.ts`)
-
-ee3 goes further than header injection: its playable URL is a **session-bound,
-rotating** `/api/torrent/proxy/{uuid}` gated on `Sec-Fetch-Site: same-origin`. The
-uuid is only valid for the session that read it, so **the resolver and the streamer
-must be the same party** — the edge owns the whole flow on its own session:
-
-```
-signed marker:  https://ee3.me/__ee3?title=<t>&year=<y>   (signed by the backend /sign grant)
-  edge → POST /login (form + same-origin headers)         → session cookie (cached)
-       → GET  /api/movies?title=<t>                        → match title+year → movie slug
-       → GET  /movies/{slug}/__data.json                   → the `torrentStreamUrl`
-       → GET  /api/torrent/proxy/{uuid}  (session + Referer + Sec-Fetch-Site:same-origin, Range)
-```
-
-The (slug, stream-path) is cached per marker (2h) so the many Range requests of a
-large file reuse one resolve instead of re-minting the uuid each time; the route
-re-auths + re-resolves once on `401/403/404/410`, and relabels ee3's
-`application/force-download` as `video/x-matroska` so the browser plays it.
-
-```
-NITRO_EE3_USERNAME=...     # empty => ee3 resolution disabled
-NITRO_EE3_PASSWORD=...
-NITRO_EE3_HOST=ee3.me      # optional; the stable `/__ee3` marker maps to this host
-```
-
-> All of the above are **EDGE secrets** — set them on the edge host(s), never in the
-> client bundle. Unset ⇒ the feature self-disables (un-injected relay / source skipped).
-
 ## Request shape
 
 ```
@@ -118,7 +92,11 @@ four fields joined by `\n`, always in this order, empty string where absent:
 sig = hex(HMAC-SHA256(secret, payload))[:32]
 ```
 
-### Backend (Python) reference — drop-in for phase 1
+### Backend (Python) reference — the `/sign` grant
+
+This is exactly what the backend's `resolvers/_crimson_proxy.py::proxy_url` does
+behind the login-gated `POST /sign` endpoint (the client hands it `{url, referer,
+origin, userAgent}` and gets the signed link back):
 
 ```python
 import os, hmac, hashlib, random
@@ -144,18 +122,19 @@ def crimson_proxy_url(url: str, *, referer="", origin="", user_agent="") -> str:
     return f"{random.choice(PROXY_BASES)}/?{q}"
 ```
 
-A resolver that currently returns `_proxy_path_for(stream_url)` just returns
-`crimson_proxy_url(stream_url, referer=…, origin=…, user_agent=…)` instead — when
-`CRIMSON_PROXY_BASE` is set. Leave it unset (empty list) and the backend keeps
-proxying itself, so this is a safe, flag-gated swap you can A/B per source. Set it
-to **one** base to use a single proxy, or **several comma-separated** bases to
-spread the load across hosts.
+`/sign` returns 503 when `CRIMSON_PROXY_BASE` is unset (no proxy configured), in
+which case the client cleanly stays on the extension (E3) or backend (E0) — so the
+proxy is a safe, flag-gated upgrade. Set `CRIMSON_PROXY_BASE` to **one** base to use
+a single proxy, or **several comma-separated** bases to spread the load across hosts
+(the same signed link is valid on all of them).
 
-> ⚠️ **Only offload sources whose CDN gating is purely header-based**
+> ⚠️ **The proxy can only serve sources whose CDN gating is purely header-based**
 > (`Referer`/`Origin`) — e.g. cinema.bz, PlayIMDb. A source whose stream token is
-> **bound to the resolving machine's IP/ASN** (VOE: note the `asn=` param) can
-> only be fetched from the backend that minted it; routing it through a proxy on
-> another network (any edge host) just 403s. Those MUST stay same-origin.
+> **bound to the resolving machine's IP/ASN** (VOE: note the `asn=` param) can only
+> be fetched from the network that minted it; routing it through a datacenter edge
+> just 403s. The client's capability router (`crimson-sources`) knows this — those
+> sources declare `needsResidentialIP` and route to the **extension (E3)** or fall
+> back to the backend, never to E2.
 
 > The proxy only rewrites the **first** playlist's children itself, so you only
 > ever sign the top-level stream URL — segments are signed by the proxy.
@@ -245,5 +224,3 @@ pnpm dev
 | `src/utils/config.ts` | Runtime config (secret, default UA, Jellyfin + ee3 creds). |
 | `src/utils/inject.ts` | Jellyfin edge token injection (add on fetch, strip from playlist children). |
 | `src/utils/jellyfin-auth.ts` | Jellyfin login (username/password → cached access token). |
-| `src/utils/ee3.ts` | ee3 full edge resolution: marker detect → search → `__data.json` → stream, with a uuid cache. |
-| `src/utils/ee3-auth.ts` | ee3 login (form POST + same-origin headers → cached `session` cookie). |
