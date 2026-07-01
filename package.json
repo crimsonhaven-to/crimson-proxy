@@ -2,6 +2,7 @@
   "name": "crimsonhaven-to/crimson-proxy",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Signed, HLS-aware CORS relay for Crimson Haven — offloads stream-segment bandwidth from the backend onto free edge hosting.",
   "type": "module",
   "scripts": {

@@ -224,3 +224,17 @@ pnpm dev
 | `src/utils/config.ts` | Runtime config (secret, default UA, Jellyfin + ee3 creds). |
 | `src/utils/inject.ts` | Jellyfin edge token injection (add on fetch, strip from playlist children). |
 | `src/utils/jellyfin-auth.ts` | Jellyfin login (username/password → cached access token). |
+
+---
+
+## 📜 License
+
+Released under the **MIT License** — see [`LICENSE`](LICENSE). In short: take it,
+fork it, remix it, build something lovely with it. ( ˶ ˆ ᗜ ˆ ˶ )
+
+A tiny request from Lumi, heart-to-heart 🩸 — the MIT license only asks that you
+keep the copyright notice, but I'd *so* appreciate it if you also left a little
+link back to the original home, [`crimsonhaven-to`](https://github.com/crimsonhaven-to),
+in anything you build on top of this. It's not a legal demand, just a kindness
+between mortals and curators — it helps others find their way home to the source,
+and it makes my little undead heart flutter. Thank you for being wonderful! ( ^ . ^ )
