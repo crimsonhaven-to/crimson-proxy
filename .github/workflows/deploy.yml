@@ -5,11 +5,11 @@ name: deploy
 # those — we deploy via the Netlify CLI instead, no repo connection needed).
 # Each deploy job self-skips when its secrets are absent, so the workflow stays
 # green whether you run one host or both.
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
 
 jobs:
   build:
