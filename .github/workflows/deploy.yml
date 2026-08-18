@@ -1,0 +1,119 @@
+name: deploy
+
+# Zero-maintenance CI/CD. One workflow ships the proxy to BOTH hosts from here,
+# so the repo can stay private + org-owned (Netlify's git integration refuses
+# those — we deploy via the Netlify CLI instead, no repo connection needed).
+# Each deploy job self-skips when its secrets are absent, so the workflow stays
+# green whether you run one host or both.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here on purpose — pnpm/action-setup@v4 reads the version
+      # from package.json's `packageManager` field (single source of truth).
+      # Passing both errors out with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build:cloudflare
+
+  deploy-cloudflare:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      # No `version:` here on purpose — pnpm/action-setup@v4 reads the version
+      # from package.json's `packageManager` field (single source of truth).
+      # Passing both errors out with ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:cloudflare
+      # Deploys only if CLOUDFLARE_API_TOKEN is set in repo secrets; otherwise
+      # this step is skipped so the workflow stays green on a Netlify-only setup.
+      - name: Deploy to Cloudflare Workers
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        uses: cloudflare/wrangler-action@v3
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The runtime secret's VALUE, read by the `secrets:` upload below. Lives
+          # only as a GitHub Actions secret — never in wrangler.toml or the repo.
+          NITRO_PROXY_SECRET: ${{ secrets.NITRO_PROXY_SECRET }}
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Uploads the Worker's runtime secret on every deploy (runs
+          # `wrangler secret put NITRO_PROXY_SECRET` with the env value above), so
+          # you never need a locally-authenticated wrangler. Set the
+          # NITRO_PROXY_SECRET repo Actions secret = the backend's PROXY_SECRET; an
+          # empty value uploads an empty secret (open mode — dev only).
+          secrets: |
+            NITRO_PROXY_SECRET
+
+  deploy-netlify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Deploys via the Netlify CLI (not git integration), so the private, org-owned
+      # repo is fine. ONE integrated `netlify deploy --prod`: it runs @netlify/build
+      # (the netlify.toml [build] command + "Edge Functions bundling") AND ships the
+      # result in the SAME process. That single-process run is mandatory here —
+      # Nitro's edge function is *framework-generated* (an "internal" edge function
+      # in `.netlify/edge-functions/`), and Netlify wires those into the deploy via an
+      # IN-PROCESS handoff from build → deploy. Splitting the phases breaks it:
+      #   • `deploy --no-build` skips @netlify/build, so the internal edge function is
+      #     never handed over → it 404s even though `netlify build` bundled it fine.
+      #   • `deploy --build --json` / `--json` suppressed the build entirely → same.
+      # Both were tried and both 404'd; the plain one-shot is the documented path that
+      # actually deploys the internal edge function.
+      #
+      # No `--json` (it interfered with the build) — we grep the production URL from
+      # the human output instead (the *.netlify.app host WITHOUT the per-deploy hash
+      # prefix). No `--dir=dist` either (that uploads only the static dir, no function).
+      # Self-skips unless NETLIFY_AUTH_TOKEN is set.
+      - name: Deploy to Netlify
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' }}
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          set -euo pipefail
+          out=$(npx --yes netlify-cli@latest deploy --prod 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          # Production URL = the *.netlify.app host without the `<hash>--` deploy prefix.
+          url=$(printf '%s\n' "$out" | grep -oiE 'https://[a-z0-9-]+\.netlify\.app' | grep -v -- '--' | head -1 || true)
+          if [ -z "$url" ]; then
+            echo '::warning::Could not parse the Netlify production URL — skipping smoke test. Verify the proxy manually.'
+            exit 0
+          fi
+          echo "Deployed to: $url"
+          # The edge function must answer the health probe (`GET /` with no target
+          # returns the crimson-proxy service JSON). 404/empty => the function wasn't
+          # shipped; -f makes curl exit non-zero on HTTP error so the job goes red.
+          echo "Smoke-testing $url/ ..."
+          body=$(curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$url/")
+          echo "Health: $body"
+          echo "$body" | grep -q '"service":"crimson-proxy"'
