@@ -8,3 +8,5 @@ dist
 .env
 # .env.*
 .DS_Store
+.pnpm-store
+.trivycache
