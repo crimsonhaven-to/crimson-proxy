@@ -132,6 +132,9 @@ scan-deps:
   image:
     name: aquasec/trivy:latest
     entrypoint: [""]
+  # The repo-wide default before_script runs corepack, which the Trivy image has
+  # no Node for. Nothing to install here anyway: Trivy reads the lockfile as-is.
+  before_script: []
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -161,6 +164,8 @@ renovate:
   image:
     name: renovate/renovate:latest
     entrypoint: [""]
+  # Same reason as scan-deps: the Renovate image brings its own toolchain.
+  before_script: []
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $RENOVATE_TOKEN
   variables:
