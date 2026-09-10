@@ -1,5 +1,4 @@
-# GitLab CI/CD — translated from .github/workflows/deploy.yml, which is left in
-# place so the proxy can still be deployed from GitHub.
+# GitLab CI/CD for crimson-proxy.
 #
 # Zero-maintenance CI/CD. One pipeline ships the proxy to BOTH hosts, so the repo can
 # stay private + group-owned (Netlify's git integration refuses those — we deploy via
