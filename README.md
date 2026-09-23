@@ -9,7 +9,7 @@ open proxy.
 
 Most Crimson sources stream from CDNs that are gated behind a `Referer`/`Origin`
 or simply serve no CORS — constraints a viewer's plain browser `fetch()` can't
-satisfy on its own. In the [New System](../crimson-backend/New_System.md) the
+satisfy on its own. In the [New System](https://docs.crimsonhaven.org/architecture/new-system/) the
 **client** ([`crimson-sources`](../crimson-sources)) does the scraping/resolving,
 not the backend; this proxy is the **E2** delivery path that lets a no-extension
 viewer still play those gated streams without the bytes ever touching the backend.
