@@ -28,8 +28,8 @@
   "pnpm": {
     "overrides": {
       "rollup": "npm:@rollup/wasm-node",
-      "brace-expansion@2": "^2.1.4",
-      "brace-expansion@5": "^5.0.9",
+      "brace-expansion@2": "^2.1.7",
+      "brace-expansion@5": "^5.0.12",
       "tar": "^7.5.21"
     }
   },

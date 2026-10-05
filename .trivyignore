@@ -1,0 +1,7 @@
+# No patched release exists for either of these yet. Both arrive only through
+# nitropack's build and dev tooling and are absent from the deployed .output bundle:
+#   braces:     nitropack > globby > fast-glob > micromatch, matches build-time globs
+#   node-forge: nitropack > listhen, self-signed certs for the local dev server
+# The expiry makes the scan fail again so these get rechecked, not forgotten.
+CVE-2026-93687 exp:2026-11-05
+CVE-2026-85393 exp:2026-11-05
